@@ -1,0 +1,183 @@
+
+<!DOCTYPE html>
+  <head>
+    <meta charset="utf-8">
+    <title>Polar Clock</title>
+    <style>
+      *,
+      *:before,
+      *:after {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+      }
+
+      body {
+        background: #001122;
+        font-family: 'Courier New';
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        margin: auto;
+        position: relative;
+        overflow: hidden;
+        -webkit-user-select: none;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+      }
+
+    #human-time {
+      color: #444;
+      font-size: 0.8em;
+      text-align: right;
+      position: absolute;
+      bottom: 2em;
+      right: 2em;
+    }
+
+    #day-of-week {
+      display: block;
+    }
+
+    </style>
+  </head>
+  <body style="background: #001122 !important;">
+    <div id="human-time">
+      <span id="day-of-week"></span><span id="date"></span>
+      <div>
+        <span id="hours-minutes-seconds"></div>
+      </div>
+    </div>
+    <script>
+      // Force dark blue background immediately
+      document.body.style.backgroundColor = '#001122';
+      document.documentElement.style.backgroundColor = '#001122';
+    </script>
+    <script src="d3.js"></script>
+    <script src="moment.js"></script>
+    <script>
+      (function() {
+        // Ensure dark blue background
+        document.body.style.backgroundColor = '#001122';
+        
+        // Wait for d3 to be available
+        function init() {
+          if (typeof d3 === 'undefined') {
+            setTimeout(init, 50);
+            return;
+          }
+        
+        // Avoid shortest-path interpolation.
+        function interpolateHsl(a, b) {
+          var i = d3.interpolateString(a, b);
+          return function(t) {
+            return d3.hsl(i(t));
+          };
+        }
+
+        var width = window.innerWidth || 1920;
+        var height = window.innerHeight || 1080;
+        var cornerRadius = 5;
+
+        var radius = Math.min(width, height) / 2.2;
+        var spacing = 0.09;
+
+        var formatMinute = d3.time.format("%M m"),
+            formatHour = d3.time.format("%H h"),
+            formatDay = d3.time.format("%a"),
+            formatDate = d3.time.format("%d d"),
+            formatMonth = d3.time.format("%b");
+
+        var color = d3.scale.linear()
+            .range(["hsl(-360,90%,65%)", "hsl(360,90%,65%)"])
+            .interpolate(interpolateHsl);
+
+        var arc = d3.svg.arc()
+            .startAngle(0)
+            .endAngle(function(d) { return d.value * 2 * Math.PI; })
+            .innerRadius(function(d) { return d.index * radius; })
+            .outerRadius(function(d) { return (d.index + spacing) * radius; })
+            .cornerRadius(cornerRadius);
+
+        function fields() {
+          var now = new Date;
+          var minutes = now.getMinutes() + now.getSeconds() / 60;
+          var hours = now.getHours() + minutes / 60;
+          return [
+            {index: .5, text: formatMinute(now), value: minutes / 60},
+            {index: .4, text: formatHour(now),   value: hours / 24},
+            {index: .3, text: formatDay(now),    value: now.getDay() / 7},
+            {index: .2, text: formatDate(now),   value: (now.getDate() - 1) / (32 - new Date(now.getYear(), now.getMonth(), 32).getDate())},
+            {index: .1, text: formatMonth(now),  value: now.getMonth() / 12}
+          ];
+        }
+
+        var svg = d3.select("body").append("svg")
+            .attr("width", width)
+            .attr("height", height)
+            .append("g")
+            .attr("transform", "translate(" + width / 2 + "," + height / 2 + ")");
+
+        var field = svg.selectAll("g")
+          .data(fields())
+          .enter().append("g");
+
+        field.append("path");
+
+        if (typeof self !== 'undefined' && self.frameElement) {
+          d3.select(self.frameElement).style("height", height + "px");
+        }
+
+        // Human Time
+        function tellTheTime() {
+          try {
+            if (typeof moment !== 'undefined') {
+              var dayOfWeek = moment().format('dddd');
+              var date = moment().format('ll');
+              var hoursMinutesSeconds = moment().format('HH:mm');
+              var dayOfWeekEl = document.getElementById('day-of-week');
+              var dateEl = document.getElementById('date');
+              var timeEl = document.getElementById('hours-minutes-seconds');
+              if (dayOfWeekEl) dayOfWeekEl.innerHTML = dayOfWeek;
+              if (dateEl) dateEl.innerHTML = date;
+              if (timeEl) timeEl.innerHTML = hoursMinutesSeconds;
+            }
+          } catch(e) {}
+        }
+
+        var lastTimeUpdate = 0;
+
+        function tick() {
+          field = field.data(fields());
+
+          field.select("path")
+            .attr("d", arc)
+            .style("fill", function(d) { return d.index === 0.4 ? "#920000" : "white"; });
+
+          // Update time display only once per second
+          var now = Date.now();
+          if (now - lastTimeUpdate >= 1000) {
+            tellTheTime();
+            lastTimeUpdate = now;
+          }
+        }
+
+        // Use setInterval for maximum compatibility
+        setInterval(tick, 1000); // once per second
+        
+        // Initial render
+        tick();
+        }
+        
+        // Start initialization
+        init();
+      })();
+    </script>
+  </body>
+</html>
