@@ -109,10 +109,13 @@
           var now = new Date;
           var minutes = now.getMinutes() + now.getSeconds() / 60;
           var hours = now.getHours() + minutes / 60;
+          // Day of week: continuous from Monday 00:00 (0) to Sunday 23:59:59 (1.0)
+          // Shift so Monday (getDay()=1) becomes 0, Sunday (getDay()=0) becomes 6
+          var dayOfWeekValue = ((now.getDay() + 6) % 7 + hours / 24) / 7;
           return [
             {index: .5, text: formatMinute(now), value: minutes / 60},
             {index: .4, text: formatHour(now),   value: hours / 24},
-            {index: .3, text: formatDay(now),    value: now.getDay() / 7},
+            {index: .3, text: formatDay(now),    value: dayOfWeekValue},
             {index: .2, text: formatDate(now),   value: (now.getDate() - 1) / (32 - new Date(now.getYear(), now.getMonth(), 32).getDate())},
             {index: .1, text: formatMonth(now),  value: now.getMonth() / 12}
           ];
