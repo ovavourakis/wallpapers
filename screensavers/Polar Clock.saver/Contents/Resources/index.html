@@ -19,7 +19,7 @@
       }
 
       body {
-        background: #000000;
+        background: var(--bg-color);
         font-family: 'Courier New';
         font-weight: 600;
         text-transform: uppercase;
@@ -33,7 +33,7 @@
       }
 
     #human-time {
-      color: #444;
+      color: var(--text-color);
       font-size: 0.8em;
       text-align: right;
       position: absolute;
@@ -47,7 +47,7 @@
 
     </style>
   </head>
-  <body style="background: #000000 !important;">
+  <body style="background: var(--bg-color) !important;">
     <div id="human-time">
       <span id="day-of-week"></span><span id="date"></span>
       <div>
@@ -55,16 +55,32 @@
       </div>
     </div>
     <script>
+      // ============================================
+      // COLOR CONFIGURATION - Modify colors here
+      // ============================================
+      var COLORS = {
+        background: '#000000',        // Main background color
+        text: '#444',                  // Text color for time display
+        hourRing: '#920000',          // Color for the hour ring (red)
+        otherRings: 'white',          // Color for other rings
+        colorScaleStart: 'hsl(-360,90%,65%)',  // Start of color scale (unused)
+        colorScaleEnd: 'hsl(360,90%,65%)'      // End of color scale (unused)
+      };
+      
+      // Set CSS variables for use in stylesheet
+      document.documentElement.style.setProperty('--bg-color', COLORS.background);
+      document.documentElement.style.setProperty('--text-color', COLORS.text);
+      
       // Force dark blue background immediately
-      document.body.style.backgroundColor = '#000000';
-      document.documentElement.style.backgroundColor = '#000000';
+      document.body.style.backgroundColor = COLORS.background;
+      document.documentElement.style.backgroundColor = COLORS.background;
     </script>
     <script src="d3.js"></script>
     <script src="moment.js"></script>
     <script>
-      (function() {
+        (function() {
         // Ensure dark blue background
-        document.body.style.backgroundColor = '#000000';
+        document.body.style.backgroundColor = COLORS.background;
         
         // Wait for d3 to be available
         function init() {
@@ -96,7 +112,7 @@
             formatMonth = d3.time.format("%b");
 
         var color = d3.scale.linear()
-            .range(["hsl(-360,90%,65%)", "hsl(360,90%,65%)"])
+            .range([COLORS.colorScaleStart, COLORS.colorScaleEnd])
             .interpolate(interpolateHsl);
 
         var arc = d3.svg.arc()
@@ -170,7 +186,7 @@
 
           field.select("path")
             .attr("d", arc)
-            .style("fill", function(d) { return d.index === 0.4 ? "#920000" : "white"; });
+            .style("fill", function(d) { return d.index === 0.4 ? COLORS.hourRing : COLORS.otherRings; });
 
           // Update time display only once per second
           var now = Date.now();
