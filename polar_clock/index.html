@@ -112,12 +112,17 @@
           // Day of week: continuous from Monday 00:00 (0) to Sunday 23:59:59 (1.0)
           // Shift so Monday (getDay()=1) becomes 0, Sunday (getDay()=0) becomes 6
           var dayOfWeekValue = ((now.getDay() + 6) % 7 + hours / 24) / 7;
+          // Month: continuous from January 1st 00:00 (0) to December 31st 23:59:59 (1.0)
+          var daysInMonth = 32 - new Date(now.getYear(), now.getMonth(), 32).getDate();
+          var monthValue = (now.getMonth() + (now.getDate() - 1 + hours / 24) / daysInMonth) / 12;
+          // Day of month: continuous from 1st at 00:00 (0) to last day at 23:59:59 (1.0)
+          var dateValue = (now.getDate() - 1 + hours / 24) / daysInMonth;
           return [
             {index: .5, text: formatMinute(now), value: minutes / 60},
             {index: .4, text: formatHour(now),   value: hours / 24},
             {index: .3, text: formatDay(now),    value: dayOfWeekValue},
-            {index: .2, text: formatDate(now),   value: (now.getDate() - 1) / (32 - new Date(now.getYear(), now.getMonth(), 32).getDate())},
-            {index: .1, text: formatMonth(now),  value: now.getMonth() / 12}
+            {index: .2, text: formatDate(now),   value: dateValue},
+            {index: .1, text: formatMonth(now),  value: monthValue}
           ];
         }
 
