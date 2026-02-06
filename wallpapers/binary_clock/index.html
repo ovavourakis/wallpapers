@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Binary Clock</title>
+    <style>
+      *,
+      *:before,
+      *:after {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+      }
+
+      body {
+        font-family: 'Courier New';
+        margin: auto;
+        position: relative;
+        overflow: hidden;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+      }
+
+      #clock-container {
+        position: absolute;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+      }
+
+      .binary-group {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        transform-origin: 100% 50%;
+      }
+
+      .binary-circle {
+        border-radius: 50%;
+        background: transparent;
+        transition: all 0.2s ease;
+      }
+
+      #day-container {
+        position: absolute;
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .day-square {
+        background: transparent;
+        transition: all 0.2s ease;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="clock-container"></div>
+    <div id="day-container"></div>
+    <script>
+      // Global configuration variables
+      const CIRCLE_SIZE = 80; // Size of circles and squares in pixels (adjustable - scales everything)
+      const CLOCK_ANGLE = 30; // Angle in degrees for all lines (adjustable)
+      const CLOCK_TOP_POSITION = 450; // Vertical position of the clock block in pixels (adjustable)
+      const DAY_ROW_VERTICAL_POSITION = 50; // Vertical position of day squares row as percentage (50 = center)
+      const DAY_ROW_HORIZONTAL_POSITION = 35; // <--- Horizontal position of day row as percentage (new global variable, 50 = center)
+      const SHOW_SECONDS = false; // Boolean flag to show/hide the seconds indicator
+
+      // Color configuration variables
+      const COLOR_BACKGROUND = '#000000'; // Background color
+      const COLOR_CIRCLE_BORDER = '#fffff8'; // Border color for binary circles
+      const COLOR_CIRCLE_FILLED = '#fffff8'; // Fill color for filled binary circles
+      const COLOR_HOURS_BORDER = '#920000'; // Border color for hours circles
+      const COLOR_HOURS_FILLED = '#920000'; // Fill color for filled hours circles
+      const COLOR_DAY_BORDER = '#fffff8'; // Border color for day squares
+      const COLOR_DAY_FILLED = '#fffff8'; // Fill color for filled day square
+
+      // Calculate scaled dimensions based on CIRCLE_SIZE
+      const BORDER_WIDTH = CIRCLE_SIZE / 15; // Border scales with size
+      const CIRCLE_GAP = CIRCLE_SIZE * 0.2; // Gap between circles in a row
+      const ROW_GAP = CIRCLE_SIZE * 0.3333; // Gap between rows
+      const HOURS_MARGIN = CIRCLE_SIZE * 0.6667; // Extra margin after hours row
+      const CONTAINER_OFFSET = -CIRCLE_SIZE / 2; // Offset to center rightmost circle on edge
+
+      // Apply background color immediately
+      document.body.style.backgroundColor = COLOR_BACKGROUND;
+      document.documentElement.style.backgroundColor = COLOR_BACKGROUND;
+      
+      // Apply sizes and colors to CSS
+      const style = document.createElement('style');
+      style.textContent = `
+        body {
+          background: ${COLOR_BACKGROUND} !important;
+        }
+        .binary-circle {
+          width: ${CIRCLE_SIZE}px;
+          height: ${CIRCLE_SIZE}px;
+          border-width: ${BORDER_WIDTH}px;
+          border-color: ${COLOR_CIRCLE_BORDER};
+          border-style: solid;
+          background: transparent;
+          transition: background-color 0.3s ease;
+        }
+        .binary-circle.filled {
+          background: ${COLOR_CIRCLE_FILLED};
+        }
+        .binary-group.hours .binary-circle {
+          border-color: ${COLOR_HOURS_BORDER};
+          transition: background-color 0.3s ease;
+        }
+        .binary-group.hours .binary-circle.filled {
+          background: ${COLOR_HOURS_FILLED};
+        }
+        .binary-group {
+          gap: ${CIRCLE_GAP}px;
+        }
+        .binary-group.hours {
+          margin-bottom: ${HOURS_MARGIN}px;
+        }
+        #clock-container {
+          right: ${CONTAINER_OFFSET}px;
+          gap: ${ROW_GAP}px;
+        }
+        .day-square {
+          width: ${CIRCLE_SIZE}px;
+          height: ${CIRCLE_SIZE}px;
+          border-width: ${BORDER_WIDTH}px;
+          border-color: ${COLOR_DAY_BORDER};
+          border-style: solid;
+          background: transparent;
+          transition: background-color 0.3s ease;
+        }
+        .day-square.filled {
+          background: ${COLOR_DAY_FILLED};
+        }
+        #day-container {
+          left: 0;
+          right: 0;
+          top: ${DAY_ROW_VERTICAL_POSITION}%;
+          transform: translate(-50%, -50%);
+          gap: ${CIRCLE_GAP}px;
+          /* Set horizontal position -- default 50% if not overridden inline */
+          position: absolute;
+          /* We'll override left via JS with DAY_ROW_HORIZONTAL_POSITION if != 50 */
+        }
+      `;
+      document.head.appendChild(style);
+
+      // Dynamically set the horizontal position of the day row
+      window.addEventListener('DOMContentLoaded', function() {
+        const dayContainer = document.getElementById('day-container');
+        if (dayContainer) {
+          dayContainer.style.left = DAY_ROW_HORIZONTAL_POSITION + '%';
+        }
+      });
+
+      function toBinary(num, bits) {
+        return num.toString(2).padStart(bits, '0');
+      }
+
+      function createBinaryGroup(value, bits, className) {
+        const group = document.createElement('div');
+        group.className = 'binary-group' + (className ? ' ' + className : '');
+        
+        // Set transform-origin to right edge (where rightmost circle center is)
+        group.style.transformOrigin = '100% 50%';
+        
+        // Apply rotation only - all rows aligned the same way
+        group.style.transform = `rotate(${CLOCK_ANGLE}deg)`;
+
+        const binary = toBinary(value, bits);
+        for (let i = 0; i < bits; i++) {
+          const circle = document.createElement('div');
+          circle.className = 'binary-circle';
+          
+          // Simple binary representation: filled if bit is 1, empty if bit is 0
+          if (binary[i] === '1') {
+            circle.classList.add('filled');
+          }
+          group.appendChild(circle);
+        }
+
+        return group;
+      }
+
+      function updateBinaryGroup(group, value, bits) {
+        const binary = toBinary(value, bits);
+        const circles = group.querySelectorAll('.binary-circle');
+        for (let i = 0; i < bits; i++) {
+          if (binary[i] === '1') {
+            circles[i].classList.add('filled');
+          } else {
+            circles[i].classList.remove('filled');
+          }
+        }
+      }
+
+      function updateDayOfWeek() {
+        const now = new Date();
+        // getDay() returns 0=Sunday, 1=Monday, etc.
+        // We want Monday=0, Tuesday=1, ..., Sunday=6
+        let dayOfWeek = now.getDay() - 1;
+        if (dayOfWeek < 0) dayOfWeek = 6; // Sunday becomes 6
+
+        const dayContainer = document.getElementById('day-container');
+        const squares = dayContainer.querySelectorAll('.day-square');
+        
+        // Update existing squares
+        for (let i = 0; i < 7; i++) {
+          if (i === dayOfWeek) {
+            squares[i].classList.add('filled');
+          } else {
+            squares[i].classList.remove('filled');
+          }
+        }
+      }
+
+      function initializeClock() {
+        const container = document.getElementById('clock-container');
+        container.innerHTML = '';
+        container.style.top = CLOCK_TOP_POSITION + 'px';
+
+        // Create initial structure
+        if (SHOW_SECONDS) {
+          container.appendChild(createBinaryGroup(0, 6)); // second
+        }
+        container.appendChild(createBinaryGroup(0, 6)); // minute
+        container.appendChild(createBinaryGroup(0, 5, 'hours')); // hour
+        container.appendChild(createBinaryGroup(0, 5)); // date
+        container.appendChild(createBinaryGroup(0, 4)); // month
+      }
+
+      function initializeDayOfWeek() {
+        const dayContainer = document.getElementById('day-container');
+        dayContainer.innerHTML = '';
+
+        // Create 7 squares, one for each day, in horizontal row
+        for (let i = 0; i < 7; i++) {
+          const square = document.createElement('div');
+          square.className = 'day-square';
+          dayContainer.appendChild(square);
+        }
+      }
+
+      function updateClock() {
+        const now = new Date();
+        const second = now.getSeconds();
+        const minute = now.getMinutes();
+        const hour = now.getHours();
+        const date = now.getDate(); 
+        const month = now.getMonth() + 1;
+        
+        const container = document.getElementById('clock-container');
+        const groups = container.querySelectorAll('.binary-group');
+        
+        // Update existing groups in place (index depends on whether seconds are shown)
+        let index = 0;
+        if (SHOW_SECONDS) {
+          updateBinaryGroup(groups[index++], second, 6);
+        }
+        updateBinaryGroup(groups[index++], minute, 6);
+        updateBinaryGroup(groups[index++], hour, 5);
+        updateBinaryGroup(groups[index++], date, 5);
+        updateBinaryGroup(groups[index++], month, 4);
+      }
+
+      // Initialize structure first
+      initializeClock();
+      initializeDayOfWeek();
+      
+      // Update every second
+      setInterval(function() {
+        updateClock();
+        updateDayOfWeek();
+      }, 1000);
+      
+      // Initial render
+      updateClock();
+      updateDayOfWeek();
+    </script>
+  </body>
+</html>

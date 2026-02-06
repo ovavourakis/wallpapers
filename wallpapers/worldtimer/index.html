@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>World Timer</title>
+  <style>
+    *, *:before, *:after { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; }
+    body {
+      background: #001122;
+      font-family: 'Futura', monospace;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+    #clock { display: block; }
+  </style>
+</head>
+<body>
+  <svg id="clock"></svg>
+  <script>
+    // ============================================
+    // CURRENT TIMEZONE – set to your IANA timezone (top of the clock)
+    // ============================================
+    var CURRENT_TIMEZONE = 'Europe/London';
+
+    // 24 cities (IANA timezone IDs) – ordered roughly east from London; Fiji dropped so Midway (UTC-11) fits
+    var CITIES = [
+      'Europe/London', 'Europe/Paris', 'Europe/Athens', 'Europe/Moscow',
+      'Asia/Dubai', 'Asia/Karachi', 'Asia/Kolkata', 'Asia/Dhaka', 'Asia/Bangkok',
+      'Asia/Shanghai', 'Asia/Tokyo', 'Asia/Vladivostok', 'Australia/Sydney', 'Pacific/Auckland',
+      'Pacific/Midway', 'Pacific/Honolulu', 'America/Anchorage', 'America/Los_Angeles', 'America/Phoenix', 'America/Mexico_City',
+      'America/New_York', 'America/Puerto_Rico', 'America/Sao_Paulo', 'Atlantic/Azores'
+    ];
+
+    var COLORS = {
+      background: '#001122',
+      
+      cityRing: '#001122',    // city names band (outer ring)
+      cityText: '#fffff8',
+      currentCity: '#920000',
+
+      ringDay: '#fffff8',     // 24h ring day half (sunrise–sunset for current timezone)
+      ringNight: '#001122',   // 24h ring night half (sunset–sunrise)
+      hourCurrent: '#920000', // current hour on 24h ring
+      hourTextDay: '#000000',   // hour numbers over day segment (sunrise–sunset)
+      hourTextNight: '#fffff8', // hour numbers over night segment
+
+      centreCircle: '#001122',  // inner circle under the hour hand
+      hourHand: '#fffff8',      // 12h hand line
+
+      enclosingRings: '#fffff8', // all enclosing circles (between bands, around minutes)
+      
+      minuteTicks: '#888888',    // 5-min radial ticks on minute orbit
+      minuteTick0: '#920000',   // the 0° (12 o'clock) minute tick
+      minuteTick90: '#888888',  // the 90° (3 o'clock) minute tick
+      minuteCircle: '#fffff8',  // orbiting minutes indicator (ring on minute track)
+      
+      dayBand: '#001122',       // band for day-of-month
+      dayBandText: '#888888',   // day numbers
+      dayBandCurrentDay: '#fffff8'  // current day number
+    };
+
+    // Fixed viewBox coordinates – everything scales with window, proportions stay identical
+    var VIEWBOX_SIZE = 1000;
+    var cx = VIEWBOX_SIZE / 2;
+    var cy = VIEWBOX_SIZE / 2;
+    var radius = VIEWBOX_SIZE / 2.2;  // ~454 in 1000 space
+
+    // Ring settings (multipliers of radius)
+    var R_CITY = 1.0;           // city names on outer ring
+    var CITY_RING_THICKNESS = 0.1;   // thickness of #fffff8 band for city names (0..1)
+
+    var R_HOURS = 0.875;         // hour numbers + dots
+    var HOUR_RING_THICKNESS = 0.1;  // thickness of #fffff8 band for 24h numbers (0..1)
+
+    var R_ENCLOSE = 0.762;      // border around minutes orbiter's orbit
+    var R_MINUTES = 0.67;       // minutes orbiter (0..1 of radius)
+
+    // Radii as multipliers of radius (0..1)
+    var R_MINUTES_CIRCLE = 0.055;   // radius of the orbiting minutes circle (ring)
+    var R_DAY_BAND_INNER = 0.51;   // day-of-month band inner radius
+    var R_DAY_BAND_OUTER = 0.57;   // day-of-month band outer radius (between minute and centre)
+    var R_CENTRE_CIRCLE = 0.165;   // central circle
+    var R_HOUR_HAND_ENCLOSE = 0.51; // enclosing ring around centre circle (0..1 of radius)
+    var R_HOUR_HAND_INNER = 0.176; // radius where 12h hand starts (just outside centre circle)
+    var R_HOUR_HAND_OUTER = 0.425; // radius where 12h hand ends (tip)
+    var R_MINUTE_TICK_LENGTH = 0.066; // length of each 5-min radial tick on minute orbit (half each side of orbit)
+
+    // Sizes in viewBox units (DOT_R and stroke widths not scaled by radius)
+    var FONT_SIZE = 24;         // same for cities and 24h
+    var MINUTES_CIRCLE_STROKE = 12;  // stroke width of the minutes circle
+    var DOT_R = 5;              // hour separator dot size
+    var ENCLOSE_STROKE = 1.5;     // stroke width of enclosing rings
+    var MINUTE_RING_STROKE = 2;  // stroke of invisible minute track
+    var SHOW_MINUTE_TICKS = true;  // set to false to hide 5-min radial ticks on minute orbit
+    var MINUTE_TICK_STROKE = 10;   // stroke width of 5-min ticks (rounded ends)
+    var DAY_BAND_FONT_SIZE = 15;  // font size for day numbers
+    var DAY_BAND_DOT_R = 3;       // radius of separator dots between days (viewBox units)
+    var HOUR_HAND_STROKE = 12;    // stroke width of 12h hand (rounded ends)
+
+    // 3-letter city codes (same order as CITIES)
+    var CITY_CODES = [
+      'LON', 'PAR', 'ATH', 'MOW', 'DXB', 'KHI', 'DEL', 'DAC', 'BKK',
+      'BJS', 'TYO', 'VVO', 'SYD', 'AKL',
+      'MID', 'HNL', 'ANC', 'LAX', 'PHX', 'MEX', 'NYC', 'PRI', 'SAO', 'AZO'
+    ];
+
+    // Lat/lng per timezone for sunrise–sunset API (one city per zone)
+    var TIMEZONE_COORDS = {
+      'Europe/London':     { lat: 51.5074,  lng: -0.1278 },
+      'Europe/Paris':      { lat: 48.8566,  lng: 2.3522 },
+      'Europe/Athens':     { lat: 37.9838,  lng: 23.7275 },
+      'Europe/Moscow':     { lat: 55.7558,  lng: 37.6173 },
+      'Asia/Dubai':        { lat: 25.2048,  lng: 55.2708 },
+      'Asia/Karachi':      { lat: 24.8607,  lng: 67.0011 },
+      'Asia/Kolkata':      { lat: 22.5726,  lng: 88.3639 },
+      'Asia/Dhaka':        { lat: 23.8103,  lng: 90.4125 },
+      'Asia/Bangkok':      { lat: 13.7563,  lng: 100.5018 },
+      'Asia/Shanghai':     { lat: 31.2304,  lng: 121.4737 },
+      'Asia/Tokyo':        { lat: 35.6762,  lng: 139.6503 },
+      'Asia/Vladivostok':  { lat: 43.1198,  lng: 131.8869 },
+      'Australia/Sydney':  { lat: -33.8688, lng: 151.2093 },
+      'Pacific/Auckland':  { lat: -36.8509, lng: 174.7645 },
+      'Pacific/Midway':    { lat: 28.2101,  lng: -177.3764 },
+      'Pacific/Honolulu':  { lat: 21.3069,  lng: -157.8583 },
+      'America/Anchorage': { lat: 61.2181,  lng: -149.9003 },
+      'America/Los_Angeles': { lat: 34.0522, lng: -118.2437 },
+      'America/Phoenix':   { lat: 33.4484,  lng: -112.0740 },
+      'America/Mexico_City': { lat: 19.4326, lng: -99.1332 },
+      'America/New_York':  { lat: 40.7128,  lng: -74.0060 },
+      'America/Puerto_Rico': { lat: 18.4655, lng: -66.1057 },
+      'America/Sao_Paulo': { lat: -23.5505, lng: -46.6333 },
+      'Atlantic/Azores':   { lat: 37.7362,  lng: -25.6693 }
+    };
+
+    function getCityCode(i) {
+      return CITY_CODES[i] != null ? CITY_CODES[i] : (CITIES[i].split('/').pop().replace(/_/g, '').slice(0, 3).toUpperCase());
+    }
+
+    function describeArc(cx, cy, rOuter, rInner) {
+      if (rInner >= rOuter) return '';
+      var d = [];
+      for (var a = 0; a <= 360; a += 2) {
+        var rad = (a - 90) * Math.PI / 180;
+        d.push((a === 0 ? 'M' : 'L') + (cx + rOuter * Math.cos(rad)) + ',' + (cy + rOuter * Math.sin(rad)));
+      }
+      for (var a = 360; a >= 0; a -= 2) {
+        var rad = (a - 90) * Math.PI / 180;
+        d.push('L' + (cx + rInner * Math.cos(rad)) + ',' + (cy + rInner * Math.sin(rad)));
+      }
+      d.push('Z');
+      return d.join(' ');
+    }
+
+    // Donut segment from startDeg to endDeg (0° = top, clockwise positive). Edges are radial.
+    function describeArcSegment(cx, cy, rOuter, rInner, startDeg, endDeg) {
+      if (rInner >= rOuter) return '';
+      var step = 2;
+      var sweep = (endDeg - startDeg + 360) % 360;
+      var aEnd = (startDeg + sweep) % 360;
+      var radStart = (startDeg - 90) * Math.PI / 180;
+      var radEnd = (aEnd - 90) * Math.PI / 180;
+      var d = [];
+      // Outer arc: start exactly at startDeg, end exactly at endDeg (so both edges are radial)
+      d.push('M' + (cx + rOuter * Math.cos(radStart)) + ',' + (cy + rOuter * Math.sin(radStart)));
+      for (var i = step; i < sweep; i += step) {
+        var a = (startDeg + i) % 360;
+        var rad = (a - 90) * Math.PI / 180;
+        d.push('L' + (cx + rOuter * Math.cos(rad)) + ',' + (cy + rOuter * Math.sin(rad)));
+      }
+      d.push('L' + (cx + rOuter * Math.cos(radEnd)) + ',' + (cy + rOuter * Math.sin(radEnd)));
+      // Radial edge inward at endDeg
+      d.push('L' + (cx + rInner * Math.cos(radEnd)) + ',' + (cy + rInner * Math.sin(radEnd)));
+      // Inner arc: endDeg back to startDeg
+      for (var j = sweep - step; j > 0; j -= step) {
+        var a = (startDeg + j) % 360;
+        var rad = (a - 90) * Math.PI / 180;
+        d.push('L' + (cx + rInner * Math.cos(rad)) + ',' + (cy + rInner * Math.sin(rad)));
+      }
+      d.push('L' + (cx + rInner * Math.cos(radStart)) + ',' + (cy + rInner * Math.sin(radStart)));
+      d.push('Z');
+      return d.join(' ');
+    }
+
+    function angleToXY(r, angleDeg) {
+      // 0° = top (12 o'clock), clockwise positive
+      var rad = (angleDeg - 90) * Math.PI / 180;
+      return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+    }
+
+    // Convert a UTC Date to hour-of-day fraction (0–24) in the given timezone; 0° = top = 00:00.
+    function hourFracInTz(date, timeZone) {
+      var parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: timeZone,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      }).formatToParts(date);
+      var o = { hour: 0, minute: 0, second: 0 };
+      parts.forEach(function (p) { if (o[p.type] !== undefined) o[p.type] = parseInt(p.value, 10); });
+      return o.hour + o.minute / 60 + o.second / 3600;
+    }
+
+    // Sunrise/sunset for current timezone: date string (YYYY-MM-DD in that TZ) and arc angles (0–360).
+    var sunData = { date: null, sunriseAngle: 90, sunsetAngle: 270 };
+    var lastSunFetchDate = null;
+
+    function fetchSunriseSunset() {
+      var local = new Date(new Date().toLocaleString('en-US', { timeZone: CURRENT_TIMEZONE }));
+      var y = local.getFullYear();
+      var m = local.getMonth() + 1;
+      var d = local.getDate();
+      var dateStr = y + '-' + (m < 10 ? '0' : '') + m + '-' + (d < 10 ? '0' : '') + d;
+      if (dateStr === lastSunFetchDate) return;
+      lastSunFetchDate = dateStr;
+      var coords = TIMEZONE_COORDS[CURRENT_TIMEZONE] || TIMEZONE_COORDS[CITIES[0]];
+      if (!coords) return;
+      var url = 'https://api.sunrise-sunset.org/json?lat=' + coords.lat + '&lng=' + coords.lng + '&formatted=0&date=' + dateStr;
+      fetch(url)
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+          if (data.status !== 'OK' || !data.results) return;
+          var sunriseDate = new Date(data.results.sunrise);
+          var sunsetDate = new Date(data.results.sunset);
+          var sunriseFrac = hourFracInTz(sunriseDate, CURRENT_TIMEZONE);
+          var sunsetFrac = hourFracInTz(sunsetDate, CURRENT_TIMEZONE);
+          sunData.date = dateStr;
+          sunData.sunriseAngle = (sunriseFrac / 24) * 360;
+          sunData.sunsetAngle = (sunsetFrac / 24) * 360;
+        })
+        .catch(function () {});
+    }
+
+    function init() {
+      var svg = document.getElementById('clock');
+      svg.setAttribute('viewBox', '0 0 ' + VIEWBOX_SIZE + ' ' + VIEWBOX_SIZE);
+      svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+      svg.setAttribute('width', '100%');
+      svg.setAttribute('height', '100%');
+      while (svg.lastChild) svg.removeChild(svg.lastChild);
+
+      // #fffff8 band for city ring (outer)
+      var rCityOut = radius * R_CITY;
+      var rCityIn = radius * (R_CITY - CITY_RING_THICKNESS);
+      var cityBandPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      cityBandPath.setAttribute('d', describeArc(cx, cy, rCityOut, rCityIn));
+      cityBandPath.setAttribute('fill', COLORS.cityRing);
+      cityBandPath.setAttribute('stroke', 'none');
+      svg.appendChild(cityBandPath);
+
+      // Enclosing circle exactly midway between city ring (inner edge) and 24h ring (outer edge)
+      var rCityInner = radius * (R_CITY - CITY_RING_THICKNESS);
+      var rHoursOut = radius * R_HOURS;
+      var rBetween = (rCityInner + rHoursOut) / 2;
+      var betweenCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      betweenCircle.setAttribute('cx', cx);
+      betweenCircle.setAttribute('cy', cy);
+      betweenCircle.setAttribute('r', rBetween);
+      betweenCircle.setAttribute('fill', 'none');
+      betweenCircle.setAttribute('stroke', COLORS.enclosingRings);
+      betweenCircle.setAttribute('stroke-width', ENCLOSE_STROKE);
+      svg.appendChild(betweenCircle);
+
+      // Enclosing rings: inner (inside minute orbit) and outer, equidistant from minute orbit
+      var rMin = radius * R_MINUTES;
+      var rEnclose = radius * R_ENCLOSE;
+      var rEncloseInner = 2 * rMin - rEnclose;
+      var innerCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      innerCircle.setAttribute('cx', cx);
+      innerCircle.setAttribute('cy', cy);
+      innerCircle.setAttribute('r', rEncloseInner);
+      innerCircle.setAttribute('fill', 'none');
+      innerCircle.setAttribute('stroke', COLORS.enclosingRings);
+      innerCircle.setAttribute('stroke-width', ENCLOSE_STROKE);
+      svg.appendChild(innerCircle);
+
+      // Outer enclosing circle (outside minute orbit)
+      var outerCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      outerCircle.setAttribute('cx', cx);
+      outerCircle.setAttribute('cy', cy);
+      outerCircle.setAttribute('r', rEnclose);
+      outerCircle.setAttribute('fill', 'none');
+      outerCircle.setAttribute('stroke', COLORS.enclosingRings);
+      outerCircle.setAttribute('stroke-width', ENCLOSE_STROKE);
+      svg.appendChild(outerCircle);
+
+      // Current timezone index (this city will be at top = 0°)
+      var currentIndex = CITIES.indexOf(CURRENT_TIMEZONE);
+      if (currentIndex === -1) currentIndex = 0;
+
+      // Fixed ring: 24 city names, black on #fffff8 band, radial alignment, 3-letter codes; current TZ in red
+      var cityGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      cityGroup.setAttribute('class', 'cities');
+      var rCityMid = radius * (R_CITY - CITY_RING_THICKNESS / 2);
+      for (var i = 0; i < 24; i++) {
+        var angleDeg = (i - currentIndex) * (360 / 24);
+        var p = angleToXY(rCityMid, angleDeg);
+        var t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        t.setAttribute('x', p.x);
+        t.setAttribute('y', p.y);
+        t.setAttribute('text-anchor', 'middle');
+        t.setAttribute('dominant-baseline', 'middle');
+        t.setAttribute('font-size', FONT_SIZE);
+        t.setAttribute('fill', i === currentIndex ? COLORS.currentCity : COLORS.cityText);
+        t.setAttribute('transform', 'rotate(' + angleDeg + ' ' + p.x + ' ' + p.y + ')');
+        t.textContent = getCityCode(i);
+        cityGroup.appendChild(t);
+      }
+      svg.appendChild(cityGroup);
+
+      // Rotating group: hour ring (day/night from sunrise–sunset) + hour numbers (00–23) and dots
+      var hourGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      hourGroup.setAttribute('class', 'hours');
+      var rHoursOut = radius * R_HOURS;
+      var rHoursIn = radius * (R_HOURS - HOUR_RING_THICKNESS);
+      var hourBandDay = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      hourBandDay.setAttribute('d', describeArcSegment(cx, cy, rHoursOut, rHoursIn, sunData.sunriseAngle, sunData.sunsetAngle));
+      hourBandDay.setAttribute('fill', COLORS.ringDay);
+      hourBandDay.setAttribute('stroke', 'none');
+      hourGroup.appendChild(hourBandDay);
+      var hourBandNight = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      hourBandNight.setAttribute('d', describeArcSegment(cx, cy, rHoursOut, rHoursIn, sunData.sunsetAngle, sunData.sunriseAngle));
+      hourBandNight.setAttribute('fill', COLORS.ringNight);
+      hourBandNight.setAttribute('stroke', 'none');
+      hourGroup.appendChild(hourBandNight);
+      fetchSunriseSunset();
+      var rHours = radius * (R_HOURS - HOUR_RING_THICKNESS / 2);
+      var hourTextElements = [];
+      var hourDotElements = [];
+      for (var h = 0; h < 24; h++) {
+        var deg = h * (360 / 24);
+        var p = angleToXY(rHours, deg);
+        var num = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        num.setAttribute('x', p.x);
+        num.setAttribute('y', p.y);
+        num.setAttribute('text-anchor', 'middle');
+        num.setAttribute('dominant-baseline', 'middle');
+        num.setAttribute('font-size', FONT_SIZE);
+        num.setAttribute('fill', COLORS.cityText);
+        num.setAttribute('transform', 'rotate(' + deg + ' ' + p.x + ' ' + p.y + ')');
+        num.textContent = (h < 10 ? '0' : '') + h;
+        num.setAttribute('data-hour', h);
+        hourGroup.appendChild(num);
+        hourTextElements.push(num);
+        var dotDeg = deg + (360 / 24) / 2;
+        var pDot = angleToXY(rHours, dotDeg);
+        var dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        dot.setAttribute('cx', pDot.x);
+        dot.setAttribute('cy', pDot.y);
+        dot.setAttribute('r', DOT_R);
+        dot.setAttribute('fill', COLORS.cityText);
+        hourGroup.appendChild(dot);
+        hourDotElements.push(dot);
+      }
+      svg.appendChild(hourGroup);
+
+      // Minute track: invisible ring (background-colored), then ticks, then orbiting minute circle on top
+      var minuteRing = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      minuteRing.setAttribute('cx', cx);
+      minuteRing.setAttribute('cy', cy);
+      minuteRing.setAttribute('r', rMin);
+      minuteRing.setAttribute('fill', 'none');
+      minuteRing.setAttribute('stroke', COLORS.background);
+      minuteRing.setAttribute('stroke-width', MINUTE_RING_STROKE);
+      svg.appendChild(minuteRing);
+
+      // Fixed radial ticks every 5 minutes (drawn before minute circle so circle passes on top)
+      if (SHOW_MINUTE_TICKS) {
+        var minuteTicksGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        minuteTicksGroup.setAttribute('class', 'minute-ticks');
+        var tickHalf = radius * R_MINUTE_TICK_LENGTH / 2;
+        for (var ti = 0; ti < 12; ti++) {
+          var angleDeg = ti * 30;  // 0, 30, 60, ... 330 (every 5 min = 30°)
+          var pInner = angleToXY(rMin - tickHalf, angleDeg);
+          var pOuter = angleToXY(rMin + tickHalf, angleDeg);
+          var tickLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+          tickLine.setAttribute('x1', pInner.x);
+          tickLine.setAttribute('y1', pInner.y);
+          tickLine.setAttribute('x2', pOuter.x);
+          tickLine.setAttribute('y2', pOuter.y);
+          tickLine.setAttribute('stroke', angleDeg === 0 ? COLORS.minuteTick0 : angleDeg === 90 ? COLORS.minuteTick90 : COLORS.minuteTicks);
+          tickLine.setAttribute('stroke-width', MINUTE_TICK_STROKE);
+          tickLine.setAttribute('stroke-linecap', 'round');
+          minuteTicksGroup.appendChild(tickLine);
+        }
+        svg.appendChild(minuteTicksGroup);
+      }
+
+      // Orbiting minute circle (rotates once per hour)
+      var minuteGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      minuteGroup.setAttribute('class', 'minutes');
+      var minutesCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      minutesCircle.setAttribute('class', 'minutes-circle');
+      minutesCircle.setAttribute('cx', cx);
+      minutesCircle.setAttribute('cy', cy - rMin);
+      minutesCircle.setAttribute('r', radius * R_MINUTES_CIRCLE);
+      minutesCircle.setAttribute('fill', COLORS.background);  // solid centre so ticks don't show through
+      minutesCircle.setAttribute('stroke', COLORS.minuteCircle);
+      minutesCircle.setAttribute('stroke-width', MINUTES_CIRCLE_STROKE);
+      minuteGroup.appendChild(minutesCircle);
+      svg.appendChild(minuteGroup);
+
+      // Day-of-month band (black): counter-rotates to 24h ring; numbers 01–(days in month) in #fffff8
+      var rDayIn = radius * R_DAY_BAND_INNER;
+      var rDayOut = radius * R_DAY_BAND_OUTER;
+      var dayBandPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      dayBandPath.setAttribute('d', describeArc(cx, cy, rDayOut, rDayIn));
+      dayBandPath.setAttribute('fill', COLORS.dayBand);
+      dayBandPath.setAttribute('stroke', 'none');
+      svg.appendChild(dayBandPath);
+      var dayGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      dayGroup.setAttribute('class', 'day-band');
+      var rDayMid = (rDayIn + rDayOut) / 2;
+      var dayTextElements = [];
+      var dayDotElements = [];
+      for (var d = 1; d <= 31; d++) {
+        var dayEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        dayEl.setAttribute('data-day', d);
+        dayEl.setAttribute('text-anchor', 'middle');
+        dayEl.setAttribute('dominant-baseline', 'middle');
+        dayEl.setAttribute('font-size', DAY_BAND_FONT_SIZE);
+        dayEl.setAttribute('fill', COLORS.dayBandText);
+        dayEl.textContent = (d < 10 ? '0' : '') + d;
+        dayGroup.appendChild(dayEl);
+        dayTextElements.push(dayEl);
+        var dotEl = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        dotEl.setAttribute('data-day-dot', d);
+        dotEl.setAttribute('r', DAY_BAND_DOT_R);
+        dotEl.setAttribute('fill', COLORS.dayBandText);
+        dayGroup.appendChild(dotEl);
+        dayDotElements.push(dotEl);
+      }
+      svg.appendChild(dayGroup);
+
+      // Central circle and 12-hour hand
+      var centreCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      centreCircle.setAttribute('cx', cx);
+      centreCircle.setAttribute('cy', cy);
+      centreCircle.setAttribute('r', radius * R_CENTRE_CIRCLE);
+      centreCircle.setAttribute('fill', COLORS.centreCircle);
+      centreCircle.setAttribute('stroke', 'none');
+      svg.appendChild(centreCircle);
+      var hourHandEncloseCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      hourHandEncloseCircle.setAttribute('cx', cx);
+      hourHandEncloseCircle.setAttribute('cy', cy);
+      hourHandEncloseCircle.setAttribute('r', radius * R_HOUR_HAND_ENCLOSE);
+      hourHandEncloseCircle.setAttribute('fill', 'none');
+      hourHandEncloseCircle.setAttribute('stroke', COLORS.enclosingRings);
+      hourHandEncloseCircle.setAttribute('stroke-width', ENCLOSE_STROKE);
+      svg.appendChild(hourHandEncloseCircle);
+      var hourHandGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      hourHandGroup.setAttribute('class', 'hour-hand');
+      var hourHand = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      hourHand.setAttribute('x1', cx);
+      hourHand.setAttribute('y1', cy - radius * R_HOUR_HAND_INNER);
+      hourHand.setAttribute('x2', cx);
+      hourHand.setAttribute('y2', cy - radius * R_HOUR_HAND_OUTER);
+      hourHand.setAttribute('stroke', COLORS.hourHand);
+      hourHand.setAttribute('stroke-width', HOUR_HAND_STROKE);
+      hourHand.setAttribute('stroke-linecap', 'round');
+      hourHand.setAttribute('stroke-linejoin', 'round');
+      hourHandGroup.appendChild(hourHand);
+      svg.appendChild(hourHandGroup);
+
+      function tick() {
+        var now = new Date();
+        var local = new Date(now.toLocaleString('en-US', { timeZone: CURRENT_TIMEZONE }));
+        var hours = local.getHours();
+        var minutes = local.getMinutes();
+        var seconds = local.getSeconds();
+        var fracHour = hours + (minutes + seconds / 60) / 60;
+
+        // Sunrise/sunset: fetch for today (in current TZ) when date changes; update day/night arcs
+        var y = local.getFullYear(), m = local.getMonth() + 1, d = local.getDate();
+        var dateStr = y + '-' + (m < 10 ? '0' : '') + m + '-' + (d < 10 ? '0' : '') + d;
+        if (sunData.date !== dateStr) fetchSunriseSunset();  // one fetch per day (lastSunFetchDate guards repeats)
+        hourBandDay.setAttribute('d', describeArcSegment(cx, cy, rHoursOut, rHoursIn, sunData.sunriseAngle, sunData.sunsetAngle));
+        hourBandNight.setAttribute('d', describeArcSegment(cx, cy, rHoursOut, rHoursIn, sunData.sunsetAngle, sunData.sunriseAngle));
+
+        // Rotate hour ring so current local hour is at top (0°); highlight current hour in red
+        var hourRotation = -fracHour * (360 / 24);
+        hourGroup.setAttribute('transform', 'rotate(' + hourRotation + ' ' + cx + ' ' + cy + ')');
+        var daySpan = (sunData.sunsetAngle - sunData.sunriseAngle + 360) % 360;
+        for (var hi = 0; hi < 24; hi++) {
+          var hourAngle = (hi * 15) % 360;
+          var inDay = ((hourAngle - sunData.sunriseAngle + 360) % 360) < daySpan;
+          var fill = hi === hours ? COLORS.hourCurrent : (inDay ? COLORS.hourTextDay : COLORS.hourTextNight);
+          hourTextElements[hi].setAttribute('fill', fill);
+        }
+        for (var di = 0; di < 24; di++) {
+          var dotAngle = (di * 15 + 7.5) % 360;
+          var dotInDay = ((dotAngle - sunData.sunriseAngle + 360) % 360) < daySpan;
+          hourDotElements[di].setAttribute('fill', dotInDay ? COLORS.hourTextDay : COLORS.hourTextNight);
+        }
+
+        // Rotate minute ring (and dot) once per hour, 0 min = top
+        var fracMinute = (minutes + seconds / 60) / 60;
+        var minuteRotation = fracMinute * 360;
+        minuteGroup.setAttribute('transform', 'rotate(' + minuteRotation + ' ' + cx + ' ' + cy + ')');
+
+        // Day band: current day at 0° (12 o'clock), counter-rotates to 24h ring; text upright at 0°
+        var daysInMonth = new Date(local.getFullYear(), local.getMonth() + 1, 0).getDate();
+        var dayOfMonth = local.getDate();
+        var fracDay = (dayOfMonth - 1 + (hours + minutes / 60 + seconds / 3600) / 24) / daysInMonth;
+        var dayRotation = fracDay * 360;
+        dayGroup.setAttribute('transform', 'rotate(' + dayRotation + ' ' + cx + ' ' + cy + ')');
+        for (var di = 0; di < 31; di++) {
+          var dayNum = di + 1;
+          var angleDeg = -(dayNum - 1) * (360 / daysInMonth);
+          var pDay = angleToXY(rDayMid, angleDeg);
+          var el = dayTextElements[di];
+          el.setAttribute('x', pDay.x);
+          el.setAttribute('y', pDay.y);
+          el.setAttribute('transform', 'rotate(' + angleDeg + ' ' + pDay.x + ' ' + pDay.y + ')');  // upright at 0°
+          el.setAttribute('fill', dayNum === dayOfMonth ? COLORS.dayBandCurrentDay : COLORS.dayBandText);
+          el.setAttribute('visibility', dayNum <= daysInMonth ? 'visible' : 'hidden');
+        }
+        for (var di = 0; di < 31; di++) {
+          var dotNum = di + 1;
+          var angleDegDot = -(dotNum - 0.5) * (360 / daysInMonth);  // between day dotNum and dotNum+1
+          var pDot = angleToXY(rDayMid, angleDegDot);
+          var dotEl = dayDotElements[di];
+          dotEl.setAttribute('cx', pDot.x);
+          dotEl.setAttribute('cy', pDot.y);
+          dotEl.setAttribute('visibility', dotNum <= daysInMonth ? 'visible' : 'hidden');
+        }
+
+        // 12-hour hand: one full turn per 12 hours, 12 o'clock = top
+        var frac12 = (hours % 12 + (minutes + seconds / 60) / 60) / 12;
+        var hourHandRotation = frac12 * 360;
+        hourHandGroup.setAttribute('transform', 'rotate(' + hourHandRotation + ' ' + cx + ' ' + cy + ')');
+      }
+
+      return tick;
+    }
+
+    var tick = init();
+    var intervalId = setInterval(tick, 100);
+    tick();
+
+    // No resize handler needed – viewBox scales the whole clock, proportions stay identical
+  </script>
+</body>
+</html>
