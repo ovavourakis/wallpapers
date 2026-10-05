@@ -107,11 +107,48 @@
     </div>
   </div>
   <div id="mode-switch" aria-label="Wallpaper modes">
-    <button id="display-mode" type="button">STATIC</button><span aria-hidden="true">/</span><button id="colour-mode" type="button">LIGHT</button>
+    <button id="display-mode" type="button">STATIC</button><span aria-hidden="true">/</span><button id="colour-mode" type="button">LIGHT</button><span aria-hidden="true">/</span><button id="reload-wallpaper" type="button" aria-label="Reload wallpaper with a new structure">RELOAD</button>
   </div>
   <p id="status" role="status">Loading structure…</p>
   <script>
-    window.wallpaperDisplayMode = window.location.hash === '#dynamic' ? 'dynamic' : 'static';
+    // Plash reloads always default to static. Only our own immediate reloads
+    // carry a one-use mode, consumed as soon as the page starts.
+    let pendingDisplayMode, pendingStructure;
+    let currentStructure, structureRefreshAt;
+    // Only coordinates cross an immediate mode switch; snapshots stay in memory.
+    async function transferStructure(action, value) {
+      const db = await new Promise((resolve, reject) => {
+        const request = indexedDB.open('wallpaper-mode-transfer', 1);
+        request.onupgradeneeded = () => request.result.createObjectStore('transfer');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      try {
+        return await new Promise((resolve, reject) => {
+          const transaction = db.transaction('transfer', 'readwrite');
+          const store = transaction.objectStore('transfer');
+          let result;
+          if (action === 'save') store.put(value, 'current');
+          else {
+            const request = store.get('current');
+            request.onsuccess = () => { result = request.result; store.delete('current'); };
+          }
+          transaction.oncomplete = () => resolve(result);
+          transaction.onerror = () => reject(transaction.error);
+        });
+      } finally { db.close(); }
+    }
+    try {
+      pendingDisplayMode = window.sessionStorage.getItem('wallpaper-next-display-mode');
+      window.sessionStorage.removeItem('wallpaper-next-display-mode');
+      pendingStructure = window.sessionStorage.getItem('wallpaper-reuse-structure') === 'yes';
+      window.sessionStorage.removeItem('wallpaper-reuse-structure');
+    } catch {}
+    window.wallpaperDisplayMode = pendingDisplayMode === 'dynamic' ? 'dynamic' : 'static';
+    function reloadWallpaper(mode = window.wallpaperDisplayMode) {
+      try { window.sessionStorage.setItem('wallpaper-next-display-mode', mode); } catch {}
+      window.location.reload();
+    }
     const modeHourFormat = new Intl.DateTimeFormat('en-GB', {
       timeZone: 'Europe/London', hour: '2-digit', hourCycle: 'h23',
     });
@@ -139,10 +176,18 @@
       if (!document.hidden) updateScheduledMode();
     });
     window.addEventListener('pagehide', () => clearInterval(modeTimer), { once: true });
-    function switchDisplayMode(mode) {
-      if (window.wallpaperDisplayMode === mode) return;
-      window.location.hash = mode === 'static' ? 'static' : 'dynamic';
-      window.location.reload();
+    let switchingDisplayMode = false;
+    async function switchDisplayMode(mode) {
+      if (window.wallpaperDisplayMode === mode || switchingDisplayMode || !currentStructure) return;
+      switchingDisplayMode = true;
+      try {
+        await transferStructure('save', { ...currentStructure, refreshAt: structureRefreshAt });
+        window.sessionStorage.setItem('wallpaper-reuse-structure', 'yes');
+        reloadWallpaper(mode);
+      } catch (error) {
+        switchingDisplayMode = false;
+        console.error('Could not switch display mode while retaining the structure:', error);
+      }
     }
     window.addEventListener('keydown', event => {
       if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || !['m', 's', 'd'].includes(event.key?.toLowerCase())) return;
@@ -66368,7 +66413,8 @@ ATOM 56294 H H    . LEU BA 2 211 ? 158.512 29.938  146.652 1.00 33.00  ? 203 LEU
           return await response.json();
         } finally { clearTimeout(timeout); }
       }
-      async function randomProtein() {
+      async function randomProtein(attempt = 0) {
+        if (attempt >= 10) throw new Error('No assembly within the 20-chain limit was found');
         const query = {
           query: { type: 'group', logical_operator: 'and', nodes: [
             { type: 'terminal', service: 'text', parameters: {
@@ -66379,6 +66425,8 @@ ATOM 56294 H H    . LEU BA 2 211 ? 158.512 29.938  146.652 1.00 33.00  ? 203 LEU
               attribute: 'entity_poly.rcsb_entity_polymer_type', operator: 'exact_match', value: 'Protein' } },
             { type: 'terminal', service: 'text', parameters: {
               attribute: 'entity_poly.rcsb_sample_sequence_length', operator: 'greater', value: 30 } },
+            { type: 'terminal', service: 'text', parameters: {
+              attribute: 'rcsb_assembly_info.polymer_entity_instance_count_protein', operator: 'less_or_equal', value: 20 } },
           ] },
           return_type: 'entry', request_options: { paginate: { start: 0, rows: 1 } },
         };
@@ -66392,6 +66440,9 @@ ATOM 56294 H H    . LEU BA 2 211 ? 158.512 29.938  146.652 1.00 33.00  ? 203 LEU
         const entry = { id, assembly: null, axis: null, center: null };
         try {
           const assembly = await fetchJson(`https://data.rcsb.org/rest/v1/core/assembly/${id}/1`);
+          if (assembly.rcsb_assembly_info?.polymer_entity_instance_count_protein > 20) {
+            return randomProtein(attempt + 1);
+          }
           entry.assembly = '1';
           const axes = (assembly.rcsb_struct_symmetry || [])
             .filter(symmetry => symmetry.kind === 'Global Symmetry' && symmetry.symbol !== 'C1')
@@ -66438,7 +66489,8 @@ ATOM 56294 H H    . LEU BA 2 211 ? 158.512 29.938  146.652 1.00 33.00  ? 203 LEU
           pdbLink.ariaLabel = `View PDB entry ${pdbId.toUpperCase()}`;
           document.getElementById('pdb-detail').hidden = false;
           status.hidden = true;
-          return setTimeout(() => window.location.reload(), 5 * 60 * 1000);
+          structureRefreshAt ??= Date.now() + 5 * 60 * 1000;
+          return setTimeout(() => reloadWallpaper(), Math.max(0, structureRefreshAt - Date.now()));
         }
       function showPermanentBackup() {
         const image = document.createElement('img');
@@ -66455,14 +66507,22 @@ ATOM 56294 H H    . LEU BA 2 211 ? 158.512 29.938  146.652 1.00 33.00  ? 203 LEU
       try {
         let entry, coordinates;
         try {
-          if (navigator.onLine === false) throw new Error('Offline');
-          entry = await randomProtein();
-          coordinates = await fetchCoordinates(entry.id);
+          // Consume and delete the one-use transfer, including any stale record.
+          const retained = await transferStructure('consume').catch(() => null);
+          if (pendingStructure && retained?.entry && retained?.coordinates) {
+            ({ entry, coordinates } = retained);
+            structureRefreshAt = retained.refreshAt;
+          } else {
+            if (navigator.onLine === false) throw new Error('Offline');
+            entry = await randomProtein();
+            coordinates = await fetchCoordinates(entry.id);
+          }
         } catch (error) {
           console.warn('Using saved proteasome:', error);
           entry = fallbackEntry;
           coordinates = fallbackCoordinates();
         }
+        currentStructure = { entry, coordinates };
         if (window.wallpaperDisplayMode === 'static' && entry.id === '1PMA' && permanentBackup) {
           showPermanentBackup();
           return;
@@ -66526,7 +66586,9 @@ ATOM 56294 H H    . LEU BA 2 211 ? 158.512 29.938  146.652 1.00 33.00  ? 203 LEU
           console.warn('Unable to build downloaded structure; using saved proteasome', error);
           await viewer.plugin.clear();
           entry = fallbackEntry;
-          structure = await buildStructure(fallbackCoordinates(), entry);
+          coordinates = fallbackCoordinates();
+          currentStructure = { entry, coordinates };
+          structure = await buildStructure(coordinates, entry);
         }
         const pdbId = entry.id;
         if (window.wallpaperDisplayMode === 'static' && pdbId === '1PMA') {
@@ -66550,6 +66612,12 @@ ATOM 56294 H H    . LEU BA 2 211 ? 158.512 29.938  146.652 1.00 33.00  ? 203 LEU
         const chainKeys = new Set();
         for (const unit of polymer.obj.data.units) {
           for (const element of unit.elements) chainKeys.add(chainKey(unit, element));
+        }
+        if (chainKeys.size > 20 && pdbId !== fallbackEntry.id) {
+          window.removeEventListener('wallpaper-mode-change', applyRendererMode);
+          viewer.plugin.dispose();
+          reloadWallpaper();
+          return;
         }
         const keysForPalette = [...chainKeys];
         const shades = keysForPalette.map((_, i) => {
@@ -66973,7 +67041,7 @@ ATOM 56294 H H    . LEU BA 2 211 ? 158.512 29.938  146.652 1.00 33.00  ? 203 LEU
         const extent = Math.hypot(window.innerWidth, window.innerHeight);
         // Linear white coverage through the entire clock, then a fast exponential tail.
         const clockRadius = Math.min(extent, Math.hypot(bounds.right, window.innerHeight - bounds.top) + 24);
-        const falloff = Math.max(70, clockRadius * 0.24);
+        const falloff = Math.max(120, clockRadius * 0.48);
         const veilRgb = window.wallpaperMode === 'dark' ? '23,24,25' : '255,255,255';
         const stops = [`rgba(${veilRgb},0.9) 0px`, `rgba(${veilRgb},0.68) ${clockRadius.toFixed(1)}px`];
         for (let i = 1; i <= 32; i++) {
@@ -67088,6 +67156,7 @@ ATOM 56294 H H    . LEU BA 2 211 ? 158.512 29.938  146.652 1.00 33.00  ? 203 LEU
       }
       display.addEventListener('click', () => switchDisplayMode(window.wallpaperDisplayMode === 'static' ? 'dynamic' : 'static'));
       colour.addEventListener('click', () => setMode(window.wallpaperMode === 'dark' ? 'light' : 'dark'));
+      document.getElementById('reload-wallpaper').addEventListener('click', () => reloadWallpaper());
       window.addEventListener('wallpaper-mode-change', updateModeLabels);
       updateModeLabels();
     })();
