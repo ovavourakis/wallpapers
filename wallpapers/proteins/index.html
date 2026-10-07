@@ -20,14 +20,15 @@
     #protein .msp-overlay { display: none !important; }
     #transition-frame { position: fixed; inset: 0; z-index: 0; pointer-events: none; opacity: 0; transition: opacity 1100ms ease; }
     #transition-frame img { width: 100%; height: 100%; object-fit: cover; display: block; }
-    #mode-switch .control-panel { position: absolute; right: 0; bottom: 20px; padding-bottom: 8px; white-space: nowrap; opacity: 0; visibility: hidden; transform: translateY(6px); transition: opacity 220ms ease, transform 220ms ease, visibility 220ms; display: flex; flex-direction: column; align-items: flex-end; }
+    #mode-switch .control-panel { isolation: isolate; position: absolute; right: 0; bottom: 20px; padding-bottom: 8px; white-space: nowrap; opacity: 0; visibility: hidden; transform: translateY(6px); transition: opacity 220ms ease, transform 220ms ease, visibility 220ms; display: flex; flex-direction: column; align-items: flex-end; }
+    #mode-switch .control-panel::before { content: ''; position: absolute; z-index: -1; inset: -16px -18px -12px -24px; background: var(--background); opacity: .9; border-radius: 10px; filter: blur(10px); pointer-events: none; }
     #mode-switch:hover .control-panel, #mode-switch:focus-within .control-panel { opacity: 1; visibility: visible; transform: translateY(0); }
     #mode-switch #control-trigger { width: 12px; height: 12px; padding: 0; border: 1px solid var(--muted); transform: rotate(45deg); transition: transform 220ms ease; margin: 8px 2px 2px; }
     #mode-switch:hover #control-trigger, #mode-switch:focus-within #control-trigger { transform: rotate(0deg); }
     #entry-picker { display: inline-flex; align-items: center; gap: 5px; pointer-events: auto; margin-left: 7px; }
     #entry-search { border: 0; background: none; color: inherit; padding: 0; width: 12px; height: 12px; cursor: pointer; }
     #entry-search svg { display: block; width: 12px; height: 12px; transform: translateY(2px); }
-    #entry-input { width: 12ch; padding: 2px 4px; border: 0; border-bottom: 1px solid var(--rule); background: var(--background); color: var(--ink); font: inherit; letter-spacing: inherit; }
+    #entry-input { width: clamp(12ch, 20vw, 28ch); padding: 2px 4px; border: 0; border-bottom: 1px solid var(--rule); background: var(--background); color: var(--ink); font: inherit; letter-spacing: inherit; }
     #entry-input[hidden] { display: none; }
     #entry-input:focus { outline: none; border-color: var(--accent); }
     #static-protein { width: 100%; height: 100%; display: block; object-fit: cover; pointer-events: none; }
@@ -111,7 +112,7 @@
       <div id="week"></div>
       <span class="clock-accent" aria-hidden="true"></span>
     </div>
-    <div id="date"><span id="date-text"></span><span id="pdb-detail" hidden> / <a id="pdb-link" target="_blank" rel="noopener noreferrer"></a><form id="entry-picker"><button id="entry-search" type="button" aria-label="Choose a structure"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.1"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l4 4"/></svg></button><input id="entry-input" hidden aria-label="PDB code" placeholder="PDB ID" autocomplete="off" spellcheck="false" maxlength="12"></form></span></div>
+    <div id="date"><span id="date-text"></span><span id="pdb-detail" hidden> / <a id="pdb-link" target="_blank" rel="noopener noreferrer"></a><form id="entry-picker"><button id="entry-search" type="button" aria-label="Choose a structure"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.1"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l4 4"/></svg></button><input id="entry-input" hidden aria-label="Structure ID or search phrase" placeholder="ID or search" autocomplete="off" spellcheck="false" maxlength="200"></form></span></div>
     <div class="clock-readout">
       <time id="time"><span id="hours"></span><span class="clock-colon" aria-hidden="true"></span><span id="minutes"></span></time>
       <span id="seconds" aria-hidden="true"></span>
@@ -80325,12 +80326,13 @@ ATOM 56294 H H    . LEU BA 2 211 ? 158.512 29.938  146.652 1.00 33.00  ? 203 LEU
       if (!options.reuse) structureRefreshAt = undefined;
       const status = document.getElementById('status');
       status.hidden = true;
-      async function fetchJson(url) {
+      async function fetchJson(url, timeoutMs = 20000) {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 20000);
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
         try {
           const response = await fetch(url, { signal: controller.signal });
-          if (!response.ok) throw new Error(`RCSB request failed: ${response.status}`);
+          if (!response.ok) throw new Error(`Structure request failed: ${response.status}`);
+          if (response.status === 204) return { result_set: [] };
           return await response.json();
         } finally { clearTimeout(timeout); }
       }
@@ -80421,8 +80423,23 @@ ATOM 56294 H H    . LEU BA 2 211 ? 158.512 29.938  146.652 1.00 33.00  ? 203 LEU
           sabdabId: detail.id, source: 'sabdab', assembly: null, axis: null, center: null, antibodyChains, cdrResidues };
       }
       async function selectedEntry(code) {
-        const value = code.trim().toLowerCase();
-        if (!/^(?:[a-z0-9]{4}|pdb_[a-z0-9]{8})$/.test(value)) throw new Error('Use a four-letter or 12-character PDB ID.');
+        let value = code.trim().toLowerCase();
+        if (!value || value.length > 200) throw new Error('Enter an ID or search phrase of up to 200 characters.');
+        // Four-character PDB IDs begin with a digit; ordinary words such as "spike" are searches.
+        if (!/^(?:[1-9][a-z0-9]{3}|pdb_[a-z0-9]{8})$/.test(value)) {
+          if (window.wallpaperSource === 'sabdab') {
+            const match = await fetchJson(`${sabdabApi}/search?q=${encodeURIComponent(code.trim())}`, 120000);
+            if (!match.id) throw new Error('No matching antibody structure found.');
+            value = match.id.toLowerCase();
+          } else {
+            const query = { query: { type: 'terminal', service: 'full_text', parameters: { value: code.trim() } },
+              return_type: 'entry', request_options: { paginate: { start: 0, rows: 1 },
+                results_content_type: ['experimental'], sort: [{ sort_by: 'score', direction: 'desc' }] } };
+            const matches = await fetchJson(`https://search.rcsb.org/rcsbsearch/v2/query?json=${encodeURIComponent(JSON.stringify(query))}`);
+            if (!matches.result_set?.length) throw new Error('No matching protein structure found.');
+            value = matches.result_set[0].identifier.toLowerCase();
+          }
+        }
         if (window.wallpaperSource === 'sabdab') {
           const id = value.length === 4 ? `pdb_0000${value}` : value;
           return { ...antibodyDescriptor(await fetchJson(`${sabdabApi}/frontend/pdb/${id}`)), requested: true };
@@ -81130,7 +81147,7 @@ ATOM 56294 H H    . LEU BA 2 211 ? 158.512 29.938  146.652 1.00 33.00  ? 203 LEU
       } catch (error) {
         console.error('Protein wallpaper failed to load:', error);
         failedViewer?.plugin.dispose();
-        status.textContent = options.requested ? 'Entry unavailable from this source. Try another PDB ID.' : 'Unable to load the structure. Please retry.';
+        status.textContent = options.requested ? `${error.message || 'Entry unavailable from this source.'} Try another ID or search phrase.` : 'Unable to load the structure. Please retry.';
         status.hidden = false;
         currentStructure = previousStructure;
         if (previousImage) { cover.style.opacity = '1'; window.captureWallpaperFrame = async () => previousImage; }
@@ -81347,8 +81364,8 @@ ATOM 56294 H H    . LEU BA 2 211 ? 158.512 29.938  146.652 1.00 33.00  ? 203 LEU
         event.preventDefault();
         if (loadingWallpaper) return;
         const code = input.value.trim();
-        if (!/^(?:[a-z0-9]{4}|pdb_[a-z0-9]{8})$/i.test(code)) {
-          input.setCustomValidity('Enter a four-letter or 12-character PDB ID.'); input.reportValidity(); return;
+        if (!code || code.length > 200) {
+          input.setCustomValidity('Enter an ID or search phrase of up to 200 characters.'); input.reportValidity(); return;
         }
         input.setCustomValidity(''); input.hidden = true;
         await reloadWallpaper(window.wallpaperDisplayMode, { requested: code });

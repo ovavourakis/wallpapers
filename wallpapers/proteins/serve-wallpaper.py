@@ -3,14 +3,57 @@
 import argparse
 import json
 import re
+import time
+from threading import Lock
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlsplit, urlencode
 from urllib.request import Request, urlopen
 
 UPSTREAM = 'https://sabdab.opig.stats.ox.ac.uk/api'
+METADATA_PAGES = {}
+METADATA_LOCK = Lock()
+
+def upstream_json(path):
+    with urlopen(UPSTREAM + path, timeout=25) as response:
+        return json.load(response)
+
+def metadata_page(offset):
+    # Cache only searchable metadata in memory, never coordinate files.
+    with METADATA_LOCK:
+        cached = METADATA_PAGES.get(offset)
+        if cached and time.monotonic() - cached[0] < 3600:
+            return cached[1]
+        page = upstream_json('/pdb?' + urlencode({'processing_status': 'ACCEPTED', 'limit': 500, 'offset': offset}))
+        records = []
+        for entry in page['results']:
+            chains = [chain for chain in entry.get('polymer_instances', []) if chain.get('sabdab_chain_type') in {'H', 'K', 'L', 'V', 'M', 'T'}]
+            fields = [entry.get(key) or '' for key in ('name', 'head', 'keywords', 'journal_references')]
+            fields.extend(antibody.get('id', '') for antibody in entry.get('antibodies', []))
+            for chain in chains:
+                fields.extend(str(chain.get(key) or '') for key in ('name', 'gene', 'organism_scientific', 'organism_common', 'sabdab_auth_asym_id'))
+            records.append({'id': entry['id'], 'metadata': ' '.join(fields).casefold()})
+        result = {'total': page['total'], 'results': records}
+        METADATA_PAGES[offset] = (time.monotonic(), result)
+        return result
+
+def search_antibodies(text):
+    page = upstream_json('/pdb?' + urlencode({'processing_status': 'ACCEPTED', 'limit': 1, 'offset': 0, 'antigen_name': text}))
+    if page.get('results'):
+        return {'id': page['results'][0]['id'], 'matched': 'antigen'}
+    terms = text.casefold().split()
+    offset = 0
+    while True:
+        page = metadata_page(offset)
+        for record in page['results']:
+            if all(term in record['metadata'] for term in terms):
+                return {'id': record['id'], 'matched': 'antibody'}
+        offset += 500
+        if offset >= page['total']:
+            return {'id': None, 'matched': None}
+
 
 class WallpaperHandler(SimpleHTTPRequestHandler):
     def end_headers(self):
@@ -31,7 +74,23 @@ class WallpaperHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         path = urlsplit(self.path)
-        if path.path == '/sabdab-api/pdb':
+        if path.path == '/sabdab-api/search':
+            query = parse_qs(path.query)
+            text = query.get('q', [''])[0].strip()
+            if set(query) != {'q'} or len(query['q']) != 1 or not 1 <= len(text) <= 200:
+                self.send_error(400, 'Enter a search phrase of up to 200 characters')
+                return
+            try:
+                body = json.dumps(search_antibodies(text)).encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.send_header('Cache-Control', 'no-store')
+                self.end_headers()
+                self.wfile.write(body)
+            except (HTTPError, URLError, TimeoutError, OSError, ValueError):
+                self.send_error(502, 'SAbDab search unavailable')
+        elif path.path == '/sabdab-api/pdb':
             query = parse_qs(path.query)
             try:
                 if set(query) - {'processing_status', 'antigen_type', 'limit', 'offset'}:
